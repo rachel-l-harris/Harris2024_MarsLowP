@@ -1,0 +1,250 @@
+---
+title: "RNA2Biomass_Constraint"
+author: "Rachel L. Harris"
+date: "2024-01-18"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+```{r packages}
+#Set working directory 
+# setwd("~/Path_to/Harris2024_MarsLowP") # update to source directory
+
+pkgTest <- function(...) {
+  # Install dependency libraries if not installed and load them
+  dep.list <- c(...)
+  new_pkgs <- dep.list[!(dep.list %in% installed.packages()[,"Package"])]
+  if(length(new_pkgs)) install.packages(new_pkgs)
+  invisible(lapply(dep.list, library, character.only=T))
+}
+# Load dependencies and setup environment
+knitr::opts_chunk$set(echo = FALSE)
+library(ggplot2)
+library(reshape2)
+library(dplyr)
+library(plyr)
+library(readxl)
+library(ggthemes)
+library(grid)
+library(gtable)
+library(gridExtra)
+library(ggpubr)
+library(scales)
+library(ggthemes)
+library(tidyverse)
+library(tidyr)
+library(drc)
+library(stringr)
+library(ggforce)
+```
+
+```{r, summarySE function}
+
+## Gives count, mean, standard deviation, standard error of the mean, and confidence interval (default 95%).
+##   data: a data frame.
+##   measurevar: the name of a column that contains the variable to be summariezed
+##   groupvars: a vector containing names of columns that contain grouping variables
+##   na.rm: a boolean that indicates whether to ignore NA's
+##   conf.interval: the percent range of the confidence interval (default is 95%)
+summarySE <- function(data=NULL, measurevar, groupvars=NULL, na.rm=FALSE,
+                      conf.interval=.95, .drop=TRUE) {
+    library(plyr)
+
+    # New version of length which can handle NA's: if na.rm==T, don't count them
+    length2 <- function (x, na.rm=FALSE) {
+        if (na.rm) sum(!is.na(x))
+        else       length(x)
+    }
+
+    # This does the summary. For each group's data frame, return a vector with
+    # N, mean, and sd
+    datac <- ddply(data, groupvars, .drop=.drop,
+      .fun = function(xx, col) {
+        c(N    = length2(xx[[col]], na.rm=na.rm),
+          mean = mean   (xx[[col]], na.rm=na.rm),
+          sd   = sd     (xx[[col]], na.rm=na.rm)
+        )
+      },
+      measurevar
+    )
+
+    # Rename the "mean" column    
+    datac <- rename(datac, c("mean" = measurevar))
+
+    datac$se <- datac$sd / sqrt(datac$N)  # Calculate standard error of the mean
+
+    # Confidence interval multiplier for standard error
+    # Calculate t-statistic for confidence interval: 
+    # e.g., if conf.interval is .95, use .975 (above/below), and use df=N-1
+    ciMult <- qt(conf.interval/2 + .5, datac$N-1)
+    datac$ci <- datac$se * ciMult
+
+    return(datac)
+}
+```
+
+
+```{r, read in data}
+#Harris et al., 2021
+RNA.2.Biomass_TableS9 <- as.data.frame(read_excel("Table S9.xlsx", sheet = 1, range = "A4:M34"), colnames = TRUE)
+
+#This study
+RNA.2.Biomass_TableS10 <- (as.data.frame(read_excel("Table S10_knowns.xlsx", sheet = 1, range = "A4:M34"), colnames = TRUE))
+```
+
+
+1) We have direct cell counts that we can map to RNA recovery for Harris et al., 2021 (https://doi.org/10.1038/s41598-021-91882-0)
+2) We will fit a translated, log-transformed Michaelis-Menten regression to the relationship between recovered RNA and total cell counts, considering cell counts as the "responsible variable" and recovered RNA as the "explanatory variable"
+```{r, regression modeling}
+
+#to avoid negative log values for a regression fit, we will first translate the data by adding a +1 to all RNA concentration values #before taking the log10 transformation
+logPlus1.RNA_long <- log10(RNA.2.Biomass_TableS9$`RNA (ng/µL)` + 1)
+log.Cells_long <- log10(RNA.2.Biomass_TableS9$`Total Direct Cell Counts (AO) Experiment End`)
+
+#build a data frame from the transformed data
+log.data <- data.frame(logPlus1.RNA_long, log.Cells_long)
+
+#Michaelis-Menten model fit of transformed data 
+log.log.model_long <- drm(log.Cells_long~logPlus1.RNA_long, data = log.data, fct = MM.2())
+
+summary(log.log.model_long) #assess goodness of model fit
+conf <- confint(log.log.model_long, level = 0.95) #95% confidence interval
+
+#save model parameters
+Cmax <- log.log.model_long$fit$par[1] #functionally equivalent to Vmax, this is the maximum supportable cell concentration
+Km<- log.log.model_long$fit$par[2] #Michaelis constant, representing the RNA concentration at which cell concentration is half
+                                  # of its maximum
+
+#get a list of predicted cell counts
+Harris2021_PredCellCounts <- 10^fitted(log.log.model_long)
+
+#get a list of residuals
+res <- resid(log.log.model_long)
+
+#Append predictions to RNA.2.Biomass_TableS9 data frame (this will be useful later)
+RNA.2.Biomass_TableS9$PredCellCounts <- Harris2021_PredCellCounts
+
+#compare probability distributions by building a quantile-quantile data frame
+QQ <- data.frame(fitted(log.log.model_long), res)
+colnames(QQ) <- c("Fitted Model Value", "Residual")
+
+#model statistics
+QQ$Residual_squared <- QQ$Residual^2
+RSS <- sum(QQ$Residual_squared) #residual sum of squares
+QQ$Observed <- log.Cells_long
+TSS <- sum((QQ$Observed - mean(QQ$Observed)))^2 #total sum of squares
+
+#produce a residual vs. fitted plot
+plot.res.vs.fit <- ggplot(QQ, aes(x = `Fitted Model Value`, y = Residual))+
+  geom_point()+
+  geom_hline(yintercept = 0)+
+  theme_base()
+
+plot.res.vs.fit
+
+#create a Q-Q plot for residuals
+# A michaelis-menten fit is a reasonable regression
+plot.qq <- ggplot(QQ, aes(sample = res))+
+  stat_qq()+
+  stat_qq_line()+
+  theme_base()
+
+plot.qq
+
+```
+
+```{r, model predictions}
+
+#write a function that will ignore NAs in the dataset
+my.max <- function(x) ifelse( !all(is.na(x)), max(x, na.rm=T), NA)
+
+#now use the Michaelis-Menten relationship to constrain first order cell counts from recovered RNA
+#treat RNA.ng.µL as variable S in the Michaelis-Menten equation and predict the sequence out 5 units past my.max
+logmodel.mml <- data.frame(log10_RNA.ng.µL = seq(0.01, my.max(logPlus1.RNA_long)+5, 0.01))
+
+#Treat Cell.count.constraint as variable v in the Michaelis-Menten equation
+logmodel.mml$Cell.count.constraint <- predict(log.log.model_long, newdata = logmodel.mml, interval = "confidence", level = 0.95)
+
+# Split "Cell.count.constraint" into "Predicted Total Cell Count", "Lower Bound", and "Upper Bound"
+logmodel.mml[c('Predicted Total Cell Count', 'Lower Bound', 'Upper Bound')] <- str_split_fixed(logmodel.mml$Cell.count.constraint, ' ', 3)
+
+# Rearrange columns and remove original Cell.count.constraint column
+logmodel.mml <- logmodel.mml[c(1, 3:5)]
+#turn characters back into numeric values
+logmodel.mml$log10_RNA.ng.µL <- as.numeric(logmodel.mml$log10_RNA.ng.µL)
+#predict cell counts by taking the exponent to the power of 10
+logmodel.mml$`Predicted Total Cell Count` <- 10^as.numeric(logmodel.mml$`Predicted Total Cell Count`) 
+logmodel.mml$`Lower Bound` <- 10^as.numeric(logmodel.mml$`Lower Bound`) #lower bound of cell counts
+logmodel.mml$`Upper Bound` <- 10^as.numeric(logmodel.mml$`Upper Bound`) #upper bound of cell counts
+logmodel.mml$RNA.ng.µL <- 10^(logmodel.mml$log10_RNA.ng.µL - 1) #substract 1 to undo the shift transformation and obtain the RNA conc.
+
+#define a new variable for the predicted cell counts from this study
+ThisStudy_PredCellCounts <- NA
+
+#take the absolute value of the log10 transformation of [RNA]
+log.RNA_thisStudy <- abs(log10(RNA.2.Biomass_TableS10$`RNA (ng/µL)`))
+
+#now predict the lower bound for cell concentration from this study based on [RNA]
+for (i in 1:length(log.RNA_thisStudy)){
+  ThisStudy_PredCellCounts[i] <- (10^Cmax)*(log.RNA_thisStudy[i]/
+                                         (10^Km + log.RNA_thisStudy[i]))
+}
+
+#Append results to RNA.2.Biomass_TableS10 data frame
+RNA.2.Biomass_TableS10$PredCellCounts <- ThisStudy_PredCellCounts
+
+
+```
+
+
+```{r, merge data frames and obtain statistics}
+#create a master data frame that encompasses both Table_S9 and Table_S10 data
+RNA.2.Biomass <- rbind(RNA.2.Biomass_TableS9, RNA.2.Biomass_TableS10)
+
+#add a column that presents known cell counts at experiment end from Table S9 and predicted cell counts from Table S10
+RNA.2.Biomass$`Act. + pred. Num. cells at exp end` <- NA
+#Table S9 direct cell count values (Harris et al., 2021) 
+RNA.2.Biomass$`Act. + pred. Num. cells at exp end`[1:30] <- RNA.2.Biomass_TableS9$`Total Direct Cell Counts (AO) Experiment End`[1:30]
+#Table S10 predicted cell count values (This Study)
+RNA.2.Biomass$`Act. + pred. Num. cells at exp end`[31:60] <- RNA.2.Biomass_TableS10$PredCellCounts[1:30]
+
+#create a molten data frame from selected values
+melt.RNA.2.Biomass <- melt(RNA.2.Biomass, id.vars = c("Study", "Temperature (˚C)", "Condition", "Pressure (mbar)", "Headspace",
+                                                      "Replicate", "RNA (ng/µL)"),
+                       measure.vars = c("Act. + pred. Num. cells at exp end"))
+
+# summarySE provides the standard deviation, standard error of the mean, and a (default 95%) confidence interval
+summary_pred <- summarySE(melt.RNA.2.Biomass, measurevar = c("value"), groupvars = c("Study", "`Temperature (˚C)`", "Condition", "`Pressure (mbar)`", "Headspace"))
+summary_pred$method <- "model.prediction"
+```
+
+```{r, plot model fit}
+plot.logmodel.mml <- ggplot(logmodel.mml, aes(x = RNA.ng.µL, y = as.numeric(`Predicted Total Cell Count`)/10))+
+  geom_line(color = "grey80")+
+  geom_ribbon(aes(ymin = as.numeric(`Predicted Total Cell Count`)/30 - as.numeric(`Lower Bound`)/30, #minimum is divided by 30 to account for 30 mL incubations
+                    ymax = as.numeric(`Predicted Total Cell Count`)/10 + as.numeric(`Upper Bound`)/10, alpha = 0.25))+ #maximum is divided by 10 to account for 10 mL incubations
+  scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x),
+              labels = trans_format("log10", math_format(10^.x)), limits = c(10^5, 10^9), "Cells/mL at Experiment End")+
+  xlab("RNA Recovery (ng/µL)")+
+  scale_x_continuous(limits = c(0, 30))+
+  scale_shape_manual(values=c(21, 22))+
+  scale_color_manual(values = c("#CC3300","black"))+
+  scale_fill_manual(values = c("#66C2A5", "#FC8D62"))+
+  geom_point(data = RNA.2.Biomass[1:30,], aes(x = `RNA (ng/µL)`, y = `AO-based Total Cells @ T = 28`, #This study
+                                       color = factor(`Pressure (atm)`),
+                                       shape = factor(`Temperature (˚C)`)), fill = "white",
+             size = 3, stroke = 1.1)+
+  geom_point(data = RNA.2.Biomass[31:60,], aes(x = `RNA (ng/µL)`, y = `Act. + pred. Num. cells at exp end`/`Volume of media (mL)`, #Harris 2021 data points
+                                       color = factor(`Pressure (atm)`),
+                                       shape = factor(`Temperature (˚C)`), fill = factor(Headspace)), 
+             size = 3, stroke = 1.1)+
+  theme_base()+
+  facet_zoom(xlim = c(0.5, 2.5), ylim = c(1e6, 1e8))+
+  theme(legend.position = "none")
+  
+suppressWarnings(print(plot.logmodel.mml))
