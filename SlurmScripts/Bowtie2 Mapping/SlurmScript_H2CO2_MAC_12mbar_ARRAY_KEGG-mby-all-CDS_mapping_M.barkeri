@@ -1,0 +1,78 @@
+#!/bin/bash
+
+#SBATCH -J array_H2CO2_MAC_12mbar_KEGG-mby-all-CDS_mapping_M.barkeri
+#SBATCH -n 1 #--ntasks
+#SBATCH -c 3 #--cpus_per-task
+#SBATCH -N 1 #node count
+#SBATCH -t 0-12:00 #--run time in hours
+#SBATCH -p bigmem #--partition
+#SBATCH --mem=300G #--memory request in GB
+#SBATCH -o /n/holyscratch01/girguis_lab/rachel_harris/Mars_low-pressure/H2CO2/MAC_12mbar/cds_KEGG-mby-all-CDS/array_H2CO2_MAC_12mbar_KEGG-mby-all-CDS_mapping_%A_%a.out
+#SBATCH -e /n/holyscratch01/girguis_lab/rachel_harris/Mars_low-pressure/H2CO2/MAC_12mbar/cds_KEGG-mby-all-CDS/array_H2CO2_MAC_12mbar_KEGG-mby-all-CDS_mapping_%A_%a.err
+#SBATCH --array=0-5
+#SBATCH --mail-type=BEGIN
+#SBATCH --mail-type=END
+#SBATCH --mail-type=FAIL
+#SBATCH --mail-user=rachel_harris@fas.harvard.edu
+
+#Set the number of threads to be used for this run
+#export OMP_NUM_THREADS=10
+
+echo "$SLURM_ARRAY_TASK_ID" #this will be 0,1,2,3,4,5
+
+echo "source activate /n/holylfs05/LABS/girguis_lab/Lab/envs/bowtie2/"
+source activate /n/holylfs05/LABS/girguis_lab/Lab/envs/bowtie2/
+echo ""
+
+echo "cd /n/girguis_lab/Users/rachel_harris/Mars_low-pressure/fastq/Mars_low-pressure"
+cd /n/girguis_lab/Users/rachel_harris/Mars_low-pressure/fastq/Mars_low-pressure
+
+echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
+echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
+echo "####     B O W T I E 2       ###"
+echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
+echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"
+
+echo ""
+echo "BEGIN MAPPING LIBRARIES TO M. BARKERI str. MS (ncbi) CDS GENES"
+
+# echo ""
+# echo "Build reference assembly of M. barkeri MS ncbi-all-CDS fastas"
+
+# echo "bowtie2-build -f /n/girguis_lab/Users/rachel_harris/Mars_low-pressure/M.barkeri_MS/ncbi.M.barkeri-MS_cds.fasta /n/girguis_lab/Users/rachel_harris/Mars_low-pressure/M.barkeri_MS/ncbi.M.barkeri-MS_cds.ref"
+# bowtie2-build -f /n/girguis_lab/Users/rachel_harris/Mars_low-pressure/M.barkeri_MS/ncbi.M.barkeri-MS_cds.fasta /n/girguis_lab/Users/rachel_harris/Mars_low-pressure/M.barkeri_MS/ncbi.M.barkeri-MS_cds.ref
+
+# echo ""
+# echo "reference assembly complete"
+
+echo ""
+echo "########################################################"
+echo "mapping H2CO2/MAC_12mbar reads to the reference assembly"
+echo "########################################################"
+echo ""
+echo "cd H2CO2/MAC_12mbar"
+cd H2CO2/MAC_12mbar
+echo ""
+
+echo "Load the sample names into a bash array"
+echo "samples=(A1-MAC2 A2-MAC2 A3-MAC1 A3-MAC2 A4-MAC1 A4-MAC2)"
+samples=(A1-MAC2 A2-MAC2 A3-MAC1 A3-MAC2 A4-MAC1 A4-MAC2)
+echo ""
+
+echo "Run bowtie2, using the SLURM_ARRAY_TASK_ID variable to identify which position in the 'samples' array to use"
+echo ""
+echo "bowtie2 -q -t -x /n/girguis_lab/Users/rachel_harris/Mars_low-pressure/M.barkeri_MS/ncbi.M.barkeri-MS_cds.ref \
+-1 ${samples[$SLURM_ARRAY_TASK_ID]}_R1.fastq.gz \
+-2 ${samples[$SLURM_ARRAY_TASK_ID]}_R2.fastq.gz \
+-p 8 -S /n/holyscratch01/girguis_lab/rachel_harris/Mars_low-pressure/H2CO2/MAC_12mbar/cds_KEGG-mby-all-CDS/${samples[$SLURM_ARRAY_TASK_ID]}.mappedReads.sam"
+
+bowtie2 -q -t -x /n/girguis_lab/Users/rachel_harris/Mars_low-pressure/M.barkeri_MS/ncbi.M.barkeri-MS_cds.ref \
+-1 ${samples[$SLURM_ARRAY_TASK_ID]}_R1.fastq.gz \
+-2 ${samples[$SLURM_ARRAY_TASK_ID]}_R2.fastq.gz \
+-p 8 -S /n/holyscratch01/girguis_lab/rachel_harris/Mars_low-pressure/H2CO2/MAC_12mbar/cds_KEGG-mby-all-CDS/${samples[$SLURM_ARRAY_TASK_ID]}.mappedReads.sam
+echo ""
+echo "complete"
+
+
+
+
